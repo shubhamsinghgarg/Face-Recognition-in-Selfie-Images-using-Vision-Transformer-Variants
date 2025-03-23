@@ -1,0 +1,94 @@
+import torch
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+import torch.nn as nn
+import torch.optim as optim
+import timm
+
+# Define transformations with data augmentation
+train_transform = transforms.Compose([
+    transforms.Resize((224, 224)),  # Adjust size to match model expected input
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+])
+
+test_transform = transforms.Compose([
+    transforms.Resize((224, 224)),  # Adjust size to match model expected input
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+])
+
+# Load the dataset with augmented transformations
+train_dataset = datasets.ImageFolder(root='./WSD_Dataset/train', transform=train_transform)
+test_dataset = datasets.ImageFolder(root='./WSD_Dataset/test', transform=test_transform)
+
+# Create data loaders
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+# Initialize the pretrained model
+model_name = 'maxvit_base_tf_224'  
+v = timm.create_model(model_name, pretrained=True, num_classes=42)
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.AdamW(v.parameters(), lr=0.001, weight_decay=0.01)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.7)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+v.to(device)
+
+num_epochs = 200
+
+for epoch in range(num_epochs):
+    v.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    for images, labels in train_loader:
+        images, labels = images.to(device), labels.to(device)
+        
+        optimizer.zero_grad()
+        outputs = v(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item()
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+
+    training_accuracy = 100 * correct / total
+    training_loss = running_loss / len(train_loader)
+    
+    scheduler.step()  # Adjust the learning rate
+
+    v.eval()
+    test_loss = 0.0
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = v(images)
+            loss = criterion(outputs, labels)
+            test_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    testing_accuracy = 100 * correct / total
+    testing_loss = test_loss / len(test_loader)
+
+    print(f'Epoch {epoch+1}/{num_epochs}, Training Loss: {training_loss:.4f}, Training Accuracy: {training_accuracy:.2f}%, Testing Loss: {testing_loss:.4f}, Testing Accuracy: {testing_accuracy:.2f}%')
+
+# Save the model
+torch.save(v.state_dict(), 'maxvit_model_wsd.pth')
+
+# To load the model for future use
+# v.load_state_dict(torch.load('maxvit_model_wsd.pth'))
+
